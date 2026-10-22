@@ -10,6 +10,8 @@ import pandas_market_calendars as mcal
 import datetime
 import time
 
+from edgar_funcs import *
+
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 
@@ -33,34 +35,9 @@ data['ReferenceDate'] = data.index.isin(five_days_before)
 
 # Request
 headers = {'User-Agent': "joshowenclark@live.co.uk"}
-urls = [
-    f"https://www.sec.gov/Archives/edgar/full-index/{year}/QTR{quarter}/master.idx" 
-    for year in range(2008, 2027) for quarter in range(1, 5)
-][:-2]
-cik_list = []
-relevant_forms = ['10-K', '10-Q', '20-F', '40-F']
-for url in urls:
-    print(f"Requesting {url}...")
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    dfs = response.text
-    header_line = "CIK|Company Name|Form Type|Date Filed|Filename"
-    start = dfs.index(header_line)
-    filings = pd.read_csv(
-        StringIO(dfs[start:]),
-        sep="|",
-        skiprows=[1],
-        dtype={"CIK": str}
-    )
-    relevant_coms = filings[filings['Form Type'].isin(relevant_forms)]
-    new_ciks = relevant_coms['CIK'].unique()
-    cik_list = list(set(cik_list) | set(new_ciks))
-    time.sleep(0.2)
-
-def add_zeros(string):
-    return string.zfill(10)
-
-cik_list = [add_zeros(cik) for cik in cik_list]
+# date_range = ['2008Q1', '2026Q3']
+# raw_cik_list = get_point_in_time_cik(headers, date_range)
+# cik_list = [add_zeros(cik) for cik in raw_cik_list]
 
 # Get the SIC codes and country of operation for Firms in the List
 
