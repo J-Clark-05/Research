@@ -1,4 +1,5 @@
 # Packages
+import os
 from io import StringIO
 import requests
 import random
@@ -9,14 +10,17 @@ import datetime as dt
 import pandas_market_calendars as mcal
 import datetime
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
-from edgar_funcs import *
+from edgar_funcs import EdgarFunctions
+headers = {'User-Agent': os.environ['email']}
+ef = EdgarFunctions(headers=headers)
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 
 # Investor Calendar
-
 nyse = mcal.get_calendar('NYSE')
 cal = nyse.schedule(start_date='2008-01-01', end_date=datetime.datetime.now().date().strftime('%Y-%m-%d'))
 trading_days = cal.index
@@ -24,7 +28,6 @@ trading_days = cal.index
 # Portfolio Rebalance Dates - Quarterly - Last day of month in March, June, September, December
 month_end = trading_days.to_series().groupby([trading_days.year, trading_days.month]).last()
 rbal_dates = month_end[month_end.dt.month.isin([3, 6, 9, 12])]
-
 data = pd.DataFrame(index=trading_days)
 data['RebalDate'] = data.index.isin(rbal_dates)
 
@@ -33,55 +36,36 @@ get_rbal_dates = data[data['RebalDate'] == True].index
 five_days_before = data.index[data.index.get_indexer(get_rbal_dates) - 5]
 data['ReferenceDate'] = data.index.isin(five_days_before)
 
-# Request
-headers = {'User-Agent': "joshowenclark@live.co.uk"}
-# date_range = ['2008Q1', '2026Q3']
-# raw_cik_list = get_point_in_time_cik(headers, date_range)
-# cik_list = [add_zeros(cik) for cik in raw_cik_list]
+# Point in time option available - Would require point in time stock price data to match
+date_range = ['2008Q1', '2026Q3']
+raw_cik_list = ef.get_point_in_time_cik(date_range)
+most_recent_quarter = ef.get_point_in_time_cik(['2026Q4', '2026Q4'])
+cik_list = [ef.add_zeros(cik) for cik in raw_cik_list]
+additions = [ef.add_zeros(cik) for cik in most_recent_quarter]
+
+# Currently Active CIKs
+active_cik_raw = requests.get("https://www.sec.gov/files/company_tickers.json", headers=headers).json()
+active_cik = [ef.add_zeros(str(d["cik_str"])) for d in active_cik_raw.values()]
+
+# Are any active cik missing from cik list
+miss = [cik for cik in active_cik if cik not in cik_list]
+miss_active = [cik for cik in cik_list if cik not in active_cik]
+print(f'There are {len(miss)} companies not in the master.idx files')
+print(f'There are {len(miss_active)} companies not in the active list')
+
+cik_list = cik_list + miss
 
 # Get the SIC codes and country of operation for Firms in the List
-
 path = 'InputData/International Programs - Two- Letter State Abbreviations.html'
 states_table = pd.read_html(path) # Dataframe in a list
 states_codes = states_table[0][1].tolist()
-
-import threading
-from concurrent.futures import ThreadPoolExecutor
 
 # Global rate limiter: at least 0.2 seconds between request starts
 lock = threading.Lock()
 next_request_time = [0.0]
 
-def get_company(cik):
-    with lock:
-        wait = next_request_time[0] - time.perf_counter()
-        if wait > 0:
-            time.sleep(wait)
-
-        next_request_time[0] = time.perf_counter() + 0.2
-
-    response = requests.get(
-        f"https://data.sec.gov/submissions/CIK{cik}.json",
-        headers=headers,
-        timeout=30
-    )
-    response.raise_for_status()
-    dfs = response.json()
-
-    return {
-        "sic_codes": dfs.get("sic"),
-        "sic_description": dfs.get("sicDescription"),
-        "state": dfs["addresses"]["business"].get("stateOrCountry"),
-        "state_description": dfs["addresses"]["business"].get(
-            "stateOrCountryDescription"
-        ),
-        "company_name": dfs.get("name"),
-        "ticker": dfs.get("tickers", [])
-    }
-
-filtered_list = cik_list[0:10]
 with ThreadPoolExecutor(max_workers=5) as executor:
-    results = list(executor.map(get_company, filtered_list))
+    results = list(executor.map(ef.get_company_info, cik_list))
 
 sic_codes = [r["sic_codes"] for r in results]
 sic_description = [r["sic_description"] for r in results]
